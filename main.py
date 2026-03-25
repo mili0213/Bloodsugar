@@ -71,6 +71,40 @@ def load_from_db(username):
 init_db()
 
 # ==========================================
+# 新增功能：智能诊断逻辑引擎 (已更新个人标准)
+# ==========================================
+def judge_blood_sugar(value, time_type):
+    """根据个人定制标准判断血糖高低"""
+    if pd.isna(value) or value == 0.0 or value is None:
+        return "未录入 ⚪"
+        
+    if time_type == 'fasting': # 空腹标准 4.4 - 7.0
+        if value < 4.4:
+            return "偏低 🔵"
+        elif value <= 7.0:
+            return "正常 🟢"
+        else:
+            return "偏高 🔴"
+            
+    elif time_type == 'postprandial': # 餐后两小时标准 < 10
+        if value < 4.4:
+            return "偏低 🔵"
+        elif value <= 10.0:
+            return "正常 🟢"
+        else:
+            return "偏高 🔴"
+            
+    elif time_type == 'bedtime': # 睡前标准 < 11
+        if value < 4.4:
+            return "偏低 🔵"
+        elif value <= 11.0:
+            return "正常 🟢"
+        else:
+            return "偏高 🔴"
+            
+    return "未知"
+
+# ==========================================
 # 4. 前端界面展示 (登录墙 + 主系统)
 # ==========================================
 st.set_page_config(page_title="血糖监测与分析系统", layout="centered", page_icon="🩸")
@@ -131,7 +165,13 @@ else:
 
     if st.button("同步至云端 (加密保存)"):
         save_to_db(current_user, selected_date, fasting_val, postprandial_val, bedtime_val)
-        st.success(f"[{current_user}] {selected_date} 的数据已安全保存！")
+        
+        f_status = judge_blood_sugar(fasting_val if fasting_val > 0 else None, 'fasting')
+        p_status = judge_blood_sugar(postprandial_val if postprandial_val > 0 else None, 'postprandial')
+        b_status = judge_blood_sugar(bedtime_val if bedtime_val > 0 else None, 'bedtime')
+        
+        st.success(f"[{selected_date}] 数据已安全保存！")
+        st.info(f"**今日诊断反馈：** \n\n空腹: {f_status} | 餐后2h: {p_status} | 睡前: {b_status}")
 
     st.divider()
     st.header("2. 个人数据分析曲线")
@@ -141,7 +181,6 @@ else:
     if not df_records.empty:
         df_records['record_date'] = pd.to_datetime(df_records['record_date'])
         
-        # 导出功能 (保留最原始的数据格式供下载)
         csv_data = df_records.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="📥 一键导出全部历史数据 (Excel CSV)",
@@ -152,24 +191,17 @@ else:
         )
         st.divider()
 
-        # ==========================================
-        # 核心升级：Plotly 交互式图表 & 去0处理
-        # ==========================================
         st.subheader("📊 血糖波动趋势图 (交互式)")
         
-        # 1. 复制一份数据专门用来画图，把所有的 0.0 替换成 None (NaN)
-        # 这样遇到未录入的数据，图表会断开连线，而不是直接掉到 0
         df_plot = df_records.copy()
         df_plot[['fasting', 'postprandial', 'bedtime']] = df_plot[['fasting', 'postprandial', 'bedtime']].replace(0.0, None)
 
-        # 2. 转换数据格式以适配 Plotly
         df_long = df_plot.melt(id_vars=['record_date'], 
                               value_vars=['fasting', 'postprandial', 'bedtime'],
                               var_name='时间段', value_name='血糖值')
         name_map = {'fasting': '空腹', 'postprandial': '餐后2h', 'bedtime': '睡前'}
         df_long['时间段'] = df_long['时间段'].map(name_map)
 
-        # 3. 绘制带有数据点的专业折线图
         fig = px.line(df_long, 
                      x='record_date', 
                      y='血糖值', 
@@ -177,12 +209,11 @@ else:
                      markers=True,
                      color_discrete_map={'空腹': '#1f77b4', '餐后2h': '#ff7f0e', '睡前': '#2ca02c'})
 
-        # 4. 图表细节深度美化
         fig.update_layout(
-            hovermode="x unified", # 鼠标悬停显示同一天的所有数据
+            hovermode="x unified",
             xaxis=dict(
                 title="日期",
-                rangeslider=dict(visible=True), # 底部增加滑动缩放条，防卡顿神器
+                rangeslider=dict(visible=True),
                 type="date"
             ),
             yaxis=dict(title="血糖 (mmol/L)"),
@@ -190,19 +221,24 @@ else:
             margin=dict(l=0, r=0, t=30, b=0)
         )
         
-        # 5. 增加一条绿色背景带，代表空腹血糖的健康参考范围 (3.9 - 6.1 mmol/L)
-        fig.add_hrect(y0=3.9, y1=6.1, line_width=0, fillcolor="green", opacity=0.1, annotation_text="空腹参考区间", annotation_position="top left")
+        # 调整了图表中的绿色健康区间带，匹配 4.4 - 7.0
+        fig.add_hrect(y0=4.4, y1=7.0, line_width=0, fillcolor="green", opacity=0.1, annotation_text="空腹正常区间 (4.4-7.0)", annotation_position="top left")
 
-        # 将图表渲染到网页上
         st.plotly_chart(fig, use_container_width=True)
         
         st.divider()
-        st.subheader("📃 原始数据记录表")
+        st.subheader("📃 历史数据与状态诊断表")
         
-        # 展示用表格（把列名换成中文更好看）
-        df_display = df_records.copy()
+        df_display = df_plot.copy() 
         df_display.set_index('record_date', inplace=True)
-        df_display.rename(columns={'fasting': '空腹血糖', 'postprandial': '餐后2h血糖', 'bedtime': '睡前血糖'}, inplace=True)
+        
+        df_display['空腹状态'] = df_display['fasting'].apply(lambda x: judge_blood_sugar(x, 'fasting'))
+        df_display['餐后状态'] = df_display['postprandial'].apply(lambda x: judge_blood_sugar(x, 'postprandial'))
+        df_display['睡前状态'] = df_display['bedtime'].apply(lambda x: judge_blood_sugar(x, 'bedtime'))
+        
+        df_display.rename(columns={'fasting': '空腹数值', 'postprandial': '餐后数值', 'bedtime': '睡前数值'}, inplace=True)
+        df_display = df_display[['空腹数值', '空腹状态', '餐后数值', '餐后状态', '睡前数值', '睡前状态']]
+        
         st.dataframe(df_display, use_container_width=True)
 
     else:
