@@ -71,10 +71,9 @@ def load_from_db(username):
 init_db()
 
 # ==========================================
-# 新增功能：智能诊断逻辑引擎 (已更新个人标准)
+# 智能诊断逻辑引擎
 # ==========================================
 def judge_blood_sugar(value, time_type):
-    """根据个人定制标准判断血糖高低"""
     if pd.isna(value) or value == 0.0 or value is None:
         return "未录入 ⚪"
         
@@ -174,12 +173,61 @@ else:
         st.info(f"**今日诊断反馈：** \n\n空腹: {f_status} | 餐后2h: {p_status} | 睡前: {b_status}")
 
     st.divider()
-    st.header("2. 个人数据分析曲线")
 
+    # ==========================================
+    # 数据读取与清洗
+    # ==========================================
     df_records = load_from_db(current_user)
 
     if not df_records.empty:
         df_records['record_date'] = pd.to_datetime(df_records['record_date'])
+        df_plot = df_records.copy()
+        df_plot[['fasting', 'postprandial', 'bedtime']] = df_plot[['fasting', 'postprandial', 'bedtime']].replace(0.0, None)
+
+        # ==========================================
+        # 核心新增功能：执行摘要 (Executive Summary)
+        # ==========================================
+        st.header("2. 数据执行摘要 (Executive Summary)")
+        
+        # 提取有效数据进行统计计算
+        valid_fasting = df_plot['fasting'].dropna()
+        
+        if not valid_fasting.empty:
+            total_days = len(df_plot)
+            avg_fasting = valid_fasting.mean()
+            std_fasting = valid_fasting.std() if len(valid_fasting) > 1 else 0 # 波动率 (标准差)
+            
+            # 计算达标率 (Time in Range): 在 4.4 到 7.0 之间的比例
+            tir_pass_count = valid_fasting.apply(lambda x: 4.4 <= x <= 7.0).sum()
+            tir_rate = (tir_pass_count / len(valid_fasting)) * 100
+
+            # 顶部核心指标卡片
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(label="总记录天数", value=f"{total_days} 天")
+            m2.metric(label="空腹均值", value=f"{avg_fasting:.1f}", delta="目标 <7.0", delta_color="inverse")
+            m3.metric(label="空腹达标率", value=f"{tir_rate:.1f}%")
+            m4.metric(label="波动率 (标准差)", value=f"{std_fasting:.2f}")
+
+            # 动态生成洞察报告文字
+            insight_text = f"**系统洞察报告**：您的账号目前共积累了 {total_days} 天的有效数据。历史空腹血糖平均值为 **{avg_fasting:.2f} mmol/L**，整体达标率为 **{tir_rate:.1f}%**。"
+            
+            if tir_rate >= 80:
+                insight_text += " 整体控制得非常出色，指标稳定性极佳！"
+            elif tir_rate >= 50:
+                insight_text += " 指标处于中等水平，存在一定波动区间，建议重点关注偏高或偏低的异常交易日（记录日）。"
+            else:
+                insight_text += " 当前达标率较低，均值或波动率偏离正常轨道，建议结合下方图表分析特定趋势，并考虑调整干预策略。"
+                
+            st.info(insight_text)
+        else:
+            st.warning("目前尚无足够的有效空腹数据来生成执行摘要。")
+
+        st.divider()
+
+        # ==========================================
+        # 高级交互式图表
+        # ==========================================
+        st.header("3. 数据分析曲线")
         
         csv_data = df_records.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
@@ -189,12 +237,6 @@ else:
             mime="text/csv",
             use_container_width=True
         )
-        st.divider()
-
-        st.subheader("📊 血糖波动趋势图 (交互式)")
-        
-        df_plot = df_records.copy()
-        df_plot[['fasting', 'postprandial', 'bedtime']] = df_plot[['fasting', 'postprandial', 'bedtime']].replace(0.0, None)
 
         df_long = df_plot.melt(id_vars=['record_date'], 
                               value_vars=['fasting', 'postprandial', 'bedtime'],
@@ -221,7 +263,6 @@ else:
             margin=dict(l=0, r=0, t=30, b=0)
         )
         
-        # 调整了图表中的绿色健康区间带，匹配 4.4 - 7.0
         fig.add_hrect(y0=4.4, y1=7.0, line_width=0, fillcolor="green", opacity=0.1, annotation_text="空腹正常区间 (4.4-7.0)", annotation_position="top left")
 
         st.plotly_chart(fig, use_container_width=True)
