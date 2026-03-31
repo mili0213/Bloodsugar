@@ -185,42 +185,74 @@ else:
         df_plot[['fasting', 'postprandial', 'bedtime']] = df_plot[['fasting', 'postprandial', 'bedtime']].replace(0.0, None)
 
         # ==========================================
-        # 核心新增功能：执行摘要 (Executive Summary)
+        # 核心新增功能：全维度多因子执行摘要 
         # ==========================================
         st.header("2. 数据执行摘要 (Executive Summary)")
         
-        # 提取有效数据进行统计计算
-        valid_fasting = df_plot['fasting'].dropna()
+        total_days = len(df_plot)
         
-        if not valid_fasting.empty:
-            total_days = len(df_plot)
-            avg_fasting = valid_fasting.mean()
-            std_fasting = valid_fasting.std() if len(valid_fasting) > 1 else 0 # 波动率 (标准差)
-            
-            # 计算达标率 (Time in Range): 在 4.4 到 7.0 之间的比例
-            tir_pass_count = valid_fasting.apply(lambda x: 4.4 <= x <= 7.0).sum()
-            tir_rate = (tir_pass_count / len(valid_fasting)) * 100
+        # 提取并计算三个时间段的有效指标
+        # 1. 空腹 (目标: 4.4 - 7.0)
+        v_fasting = df_plot['fasting'].dropna()
+        f_avg = v_fasting.mean() if not v_fasting.empty else 0
+        f_std = v_fasting.std() if len(v_fasting) > 1 else 0
+        f_tir = (v_fasting.apply(lambda x: 4.4 <= x <= 7.0).sum() / len(v_fasting)) * 100 if not v_fasting.empty else 0
 
-            # 顶部核心指标卡片
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric(label="总记录天数", value=f"{total_days} 天")
-            m2.metric(label="空腹均值", value=f"{avg_fasting:.1f}", delta="目标 <7.0", delta_color="inverse")
-            m3.metric(label="空腹达标率", value=f"{tir_rate:.1f}%")
-            m4.metric(label="波动率 (标准差)", value=f"{std_fasting:.2f}")
+        # 2. 餐后 (目标: 4.4 - 10.0)
+        v_post = df_plot['postprandial'].dropna()
+        p_avg = v_post.mean() if not v_post.empty else 0
+        p_std = v_post.std() if len(v_post) > 1 else 0
+        p_tir = (v_post.apply(lambda x: 4.4 <= x <= 10.0).sum() / len(v_post)) * 100 if not v_post.empty else 0
 
-            # 动态生成洞察报告文字
-            insight_text = f"**系统洞察报告**：您的账号目前共积累了 {total_days} 天的有效数据。历史空腹血糖平均值为 **{avg_fasting:.2f} mmol/L**，整体达标率为 **{tir_rate:.1f}%**。"
-            
-            if tir_rate >= 80:
-                insight_text += " 整体控制得非常出色，指标稳定性极佳！"
-            elif tir_rate >= 50:
-                insight_text += " 指标处于中等水平，存在一定波动区间，建议重点关注偏高或偏低的异常交易日（记录日）。"
+        # 3. 睡前 (目标: 4.4 - 11.0)
+        v_bed = df_plot['bedtime'].dropna()
+        b_avg = v_bed.mean() if not v_bed.empty else 0
+        b_std = v_bed.std() if len(v_bed) > 1 else 0
+        b_tir = (v_bed.apply(lambda x: 4.4 <= x <= 11.0).sum() / len(v_bed)) * 100 if not v_bed.empty else 0
+
+        st.markdown(f"**总活跃天数**: `{total_days} 天`")
+        
+        # 使用标签页组织复杂数据，保持界面专业清爽
+        tab_f, tab_p, tab_b = st.tabs(["🌅 空腹监控", "🍽️ 餐后2h监控", "🌙 睡前监控"])
+        
+        with tab_f:
+            if not v_fasting.empty:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("均值 (mmol/L)", f"{f_avg:.2f}", "目标 ≤7.0", delta_color="inverse")
+                col2.metric("达标率 (TIR)", f"{f_tir:.1f}%")
+                col3.metric("波动率 (标准差)", f"{f_std:.2f}")
             else:
-                insight_text += " 当前达标率较低，均值或波动率偏离正常轨道，建议结合下方图表分析特定趋势，并考虑调整干预策略。"
+                st.info("暂无有效空腹记录")
                 
+        with tab_p:
+            if not v_post.empty:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("均值 (mmol/L)", f"{p_avg:.2f}", "目标 ≤10.0", delta_color="inverse")
+                col2.metric("达标率 (TIR)", f"{p_tir:.1f}%")
+                col3.metric("波动率 (标准差)", f"{p_std:.2f}")
+            else:
+                st.info("暂无有效餐后记录")
+
+        with tab_b:
+            if not v_bed.empty:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("均值 (mmol/L)", f"{b_avg:.2f}", "目标 ≤11.0", delta_color="inverse")
+                col2.metric("达标率 (TIR)", f"{b_tir:.1f}%")
+                col3.metric("波动率 (标准差)", f"{b_std:.2f}")
+            else:
+                st.info("暂无有效睡前记录")
+
+        # 动态计算整体健康综合分 (赋予空腹更高权重)
+        if not v_fasting.empty and not v_post.empty and not v_bed.empty:
+            composite_score = (f_tir * 0.5) + (p_tir * 0.3) + (b_tir * 0.2)
+            insight_text = f"**系统洞察报告**：全维度数据监控已启动。基于历史记录，您的综合控制达标指数为 **{composite_score:.1f}/100**。 "
+            if composite_score >= 85:
+                insight_text += "各项波动率极低，整体处于高质量平稳区间。"
+            elif composite_score >= 60:
+                insight_text += "基本面稳定，但需通过上方标签页核查哪一时间段的【波动率(标准差)】偏高，以规避异常风险。"
+            else:
+                insight_text += "综合达标率偏低，多因子偏离基准线，建议结合下方时序图表进行深度归因分析。"
             st.info(insight_text)
-        else:
-            st.warning("目前尚无足够的有效空腹数据来生成执行摘要。")
 
         st.divider()
 
