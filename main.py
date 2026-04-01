@@ -7,18 +7,18 @@ import requests
 import json
 
 # ==========================================
-# 0. 动态云端引擎：调用 ChatGPT (OpenAI) API 查询 GI
+# 0. 动态云端引擎：调用 ChatAnywhere (OpenAI 代理) API 查询 GI
 # ==========================================
 def fetch_gi_from_ai(food_name):
-    """通过 OpenAI API 实时查询食物的 GI 指数"""
-    # 从 Streamlit 密码箱里读取你的 OpenAI API Key
+    """通过 ChatAnywhere API 实时查询食物的 GI 指数"""
+    # 从 Streamlit 密码箱里读取你的 API Key
     api_key = st.secrets.get("OPENAI_API_KEY")
     
     if not api_key:
         return {"error": "⚠️ API Key 未配置，请在 Streamlit Secrets 中设置 OPENAI_API_KEY。"}
 
-    # OpenAI 的标准 API 接口地址
-    url = "https://api.openai.com/v1/chat/completions"
+    # 核心修改：把官方的门牌号，换成 ChatAnywhere 的门牌号！
+    url = "https://api.chatanywhere.tech/v1/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
@@ -33,21 +33,21 @@ def fetch_gi_from_ai(food_name):
     """
     
     payload = {
-        "model": "gpt-4o-mini", # 使用极速且聪明的 mini 模型
+        "model": "gpt-3.5-turbo", # 免费版最稳定的模型
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"请查阅食物：{food_name}"}
         ],
         "temperature": 0.1,
-        "response_format": { "type": "json_object" } # 💎 OpenAI 核心黑科技：强制 JSON 模式
+        "response_format": { "type": "json_object" } # 强制 JSON 模式
     }
     
     try:
-        # 发送请求给 OpenAI
+        # 发送请求给 ChatAnywhere 服务器
         response = requests.post(url, headers=headers, json=payload, timeout=15)
         response.raise_for_status() 
         
-        # 拆解 ChatGPT 返回的数据包
+        # 拆解返回的数据包
         result = response.json()
         ai_content = result['choices'][0]['message']['content']
         
@@ -56,7 +56,7 @@ def fetch_gi_from_ai(food_name):
         return data
         
     except Exception as e:
-        return {"error": f"查询失败，请检查网络或 OpenAI API Key：{str(e)}"}
+        return {"error": f"查询失败，请检查网络或 API Key：{str(e)}"}
 
 # ==========================================
 # 1. 数据库配置与多用户表初始化
