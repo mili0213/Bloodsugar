@@ -3,6 +3,60 @@ import pandas as pd
 import datetime
 from sqlalchemy import text
 import plotly.express as px
+import requests
+import json
+
+# ==========================================
+# 0. 动态云端引擎：调用 ChatGPT (OpenAI) API 查询 GI
+# ==========================================
+def fetch_gi_from_ai(food_name):
+    """通过 OpenAI API 实时查询食物的 GI 指数"""
+    # 从 Streamlit 密码箱里读取你的 OpenAI API Key
+    api_key = st.secrets.get("OPENAI_API_KEY")
+    
+    if not api_key:
+        return {"error": "⚠️ API Key 未配置，请在 Streamlit Secrets 中设置 OPENAI_API_KEY。"}
+
+    # OpenAI 的标准 API 接口地址
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    # 核心：提示词工程，并明确要求输出 JSON
+    system_prompt = """
+    你是一个严谨的临床营养学专家。用户会输入一种食物名称。
+    请你查询或估算该食物的升糖指数(GI值)，并严格以JSON格式返回。
+    必须包含以下4个字段：
+    {"food": "食物标准名称", "gi": 具体数字, "level": "低GI 🟢/中GI 🟡/高GI 🔴 (低于55为低，55-70为中，高于70为高)", "advice": "一句简短的针对高血糖人群的食用建议"}
+    """
+    
+    payload = {
+        "model": "gpt-4o-mini", # 使用极速且聪明的 mini 模型
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"请查阅食物：{food_name}"}
+        ],
+        "temperature": 0.1,
+        "response_format": { "type": "json_object" } # 💎 OpenAI 核心黑科技：强制 JSON 模式
+    }
+    
+    try:
+        # 发送请求给 OpenAI
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response.raise_for_status() 
+        
+        # 拆解 ChatGPT 返回的数据包
+        result = response.json()
+        ai_content = result['choices'][0]['message']['content']
+        
+        # 将文本转化为 Python 可以理解的字典
+        data = json.loads(ai_content)
+        return data
+        
+    except Exception as e:
+        return {"error": f"查询失败，请检查网络或 OpenAI API Key：{str(e)}"}
 
 # ==========================================
 # 1. 数据库配置与多用户表初始化
@@ -77,30 +131,18 @@ def judge_blood_sugar(value, time_type):
     if pd.isna(value) or value == 0.0 or value is None:
         return "未录入 ⚪"
         
-    if time_type == 'fasting': # 空腹标准 4.4 - 7.0
-        if value < 4.4:
-            return "偏低 🔵"
-        elif value <= 7.0:
-            return "正常 🟢"
-        else:
-            return "偏高 🔴"
-            
-    elif time_type == 'postprandial': # 餐后两小时标准 < 10
-        if value < 4.4:
-            return "偏低 🔵"
-        elif value <= 10.0:
-            return "正常 🟢"
-        else:
-            return "偏高 🔴"
-            
-    elif time_type == 'bedtime': # 睡前标准 < 11
-        if value < 4.4:
-            return "偏低 🔵"
-        elif value <= 11.0:
-            return "正常 🟢"
-        else:
-            return "偏高 🔴"
-            
+    if time_type == 'fasting': 
+        if value < 4.4: return "偏低 🔵"
+        elif value <= 7.0: return "正常 🟢"
+        else: return "偏高 🔴"
+    elif time_type == 'postprandial': 
+        if value < 4.4: return "偏低 🔵"
+        elif value <= 10.0: return "正常 🟢"
+        else: return "偏高 🔴"
+    elif time_type == 'bedtime': 
+        if value < 4.4: return "偏低 🔵"
+        elif value <= 11.0: return "正常 🟢"
+        else: return "偏高 🔴"
     return "未知"
 
 # ==========================================
@@ -143,12 +185,41 @@ if st.session_state["logged_in_user"] is None:
 else:
     current_user = st.session_state["logged_in_user"]
     
+    # ==========================================
+    # 侧边栏：用户信息与 ChatGPT 智能 GI 引擎
+    # ==========================================
     st.sidebar.title("用户信息")
     st.sidebar.info(f"当前登录：**{current_user}**")
     if st.sidebar.button("退出登录"):
         st.session_state["logged_in_user"] = None
         st.rerun()
-
+        
+    st.sidebar.divider()
+    
+    st.sidebar.title("🤖 ChatGPT 食物 GI 速查")
+    st.sidebar.caption("接入 OpenAI gpt-4o-mini 模型，查询天下万物。")
+    
+    search_query = st.sidebar.text_input("想吃什么？输入名称 (如: 兰州拉面, 拿铁)")
+    
+    if st.sidebar.button("启动 AI 分析"):
+        if search_query:
+            with st.sidebar.status(f"正在呼叫 ChatGPT 分析【{search_query}】...", expanded=True) as status:
+                ai_data = fetch_gi_from_ai(search_query)
+                status.update(label="分析完成！", state="complete", expanded=False)
+                
+            if "error" in ai_data:
+                st.sidebar.error(ai_data["error"])
+            else:
+                st.sidebar.success(f"匹配成功：{ai_data.get('food', search_query)}")
+                st.sidebar.metric("预估 GI 指数", ai_data.get('gi', '未知'))
+                st.sidebar.markdown(f"**评级**: {ai_data.get('level', '未知')}")
+                st.sidebar.markdown(f"💡 **专家建议**: {ai_data.get('advice', '暂无建议')}")
+        else:
+            st.sidebar.warning("请先输入食物名称哦！")
+    
+    # ==========================================
+    # 主面板：核心监控区
+    # ==========================================
     st.title("🩸 个人专属血糖监测面板")
     st.header("1. 录入今日数据")
 
@@ -164,19 +235,14 @@ else:
 
     if st.button("同步至云端 (加密保存)"):
         save_to_db(current_user, selected_date, fasting_val, postprandial_val, bedtime_val)
-        
         f_status = judge_blood_sugar(fasting_val if fasting_val > 0 else None, 'fasting')
         p_status = judge_blood_sugar(postprandial_val if postprandial_val > 0 else None, 'postprandial')
         b_status = judge_blood_sugar(bedtime_val if bedtime_val > 0 else None, 'bedtime')
-        
         st.success(f"[{selected_date}] 数据已安全保存！")
         st.info(f"**今日诊断反馈：** \n\n空腹: {f_status} | 餐后2h: {p_status} | 睡前: {b_status}")
 
     st.divider()
 
-    # ==========================================
-    # 数据读取与清洗
-    # ==========================================
     df_records = load_from_db(current_user)
 
     if not df_records.empty:
@@ -184,27 +250,19 @@ else:
         df_plot = df_records.copy()
         df_plot[['fasting', 'postprandial', 'bedtime']] = df_plot[['fasting', 'postprandial', 'bedtime']].replace(0.0, None)
 
-        # ==========================================
-        # 核心新增功能：全维度多因子执行摘要 
-        # ==========================================
         st.header("2. 数据执行摘要 (Executive Summary)")
-        
         total_days = len(df_plot)
         
-        # 提取并计算三个时间段的有效指标
-        # 1. 空腹 (目标: 4.4 - 7.0)
         v_fasting = df_plot['fasting'].dropna()
         f_avg = v_fasting.mean() if not v_fasting.empty else 0
         f_std = v_fasting.std() if len(v_fasting) > 1 else 0
         f_tir = (v_fasting.apply(lambda x: 4.4 <= x <= 7.0).sum() / len(v_fasting)) * 100 if not v_fasting.empty else 0
 
-        # 2. 餐后 (目标: 4.4 - 10.0)
         v_post = df_plot['postprandial'].dropna()
         p_avg = v_post.mean() if not v_post.empty else 0
         p_std = v_post.std() if len(v_post) > 1 else 0
         p_tir = (v_post.apply(lambda x: 4.4 <= x <= 10.0).sum() / len(v_post)) * 100 if not v_post.empty else 0
 
-        # 3. 睡前 (目标: 4.4 - 11.0)
         v_bed = df_plot['bedtime'].dropna()
         b_avg = v_bed.mean() if not v_bed.empty else 0
         b_std = v_bed.std() if len(v_bed) > 1 else 0
@@ -212,7 +270,6 @@ else:
 
         st.markdown(f"**总活跃天数**: `{total_days} 天`")
         
-        # 使用标签页组织复杂数据，保持界面专业清爽
         tab_f, tab_p, tab_b = st.tabs(["🌅 空腹监控", "🍽️ 餐后2h监控", "🌙 睡前监控"])
         
         with tab_f:
@@ -242,7 +299,6 @@ else:
             else:
                 st.info("暂无有效睡前记录")
 
-        # 动态计算整体健康综合分 (赋予空腹更高权重)
         if not v_fasting.empty and not v_post.empty and not v_bed.empty:
             composite_score = (f_tir * 0.5) + (p_tir * 0.3) + (b_tir * 0.2)
             insight_text = f"**系统洞察报告**：全维度数据监控已启动。基于历史记录，您的综合控制达标指数为 **{composite_score:.1f}/100**。 "
@@ -251,14 +307,11 @@ else:
             elif composite_score >= 60:
                 insight_text += "基本面稳定，但需通过上方标签页核查哪一时间段的【波动率(标准差)】偏高，以规避异常风险。"
             else:
-                insight_text += "综合达标率偏低，多因子偏离基准线，建议结合下方时序图表进行深度归因分析。"
+                insight_text += "综合达标率偏低，多因子偏离基准线，建议结合左侧【🤖 ChatGPT 食物速查】干预饮食结构。"
             st.info(insight_text)
 
         st.divider()
 
-        # ==========================================
-        # 高级交互式图表
-        # ==========================================
         st.header("3. 数据分析曲线")
         
         csv_data = df_records.to_csv(index=False).encode('utf-8-sig')
@@ -285,11 +338,7 @@ else:
 
         fig.update_layout(
             hovermode="x unified",
-            xaxis=dict(
-                title="日期",
-                rangeslider=dict(visible=True),
-                type="date"
-            ),
+            xaxis=dict(title="日期", rangeslider=dict(visible=True), type="date"),
             yaxis=dict(title="血糖 (mmol/L)"),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             margin=dict(l=0, r=0, t=30, b=0)
