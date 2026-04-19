@@ -5,26 +5,22 @@ from sqlalchemy import text
 import plotly.express as px
 import requests
 import json
+import extra_streamlit_components as stx # 新增：引入 Cookie 管理器
 
 # ==========================================
 # 0. 动态云端引擎：调用 ChatAnywhere (OpenAI 代理) API 查询 GI
 # ==========================================
 def fetch_gi_from_ai(food_name):
-    """通过 ChatAnywhere API 实时查询食物的 GI 指数"""
-    # 从 Streamlit 密码箱里读取你的 API Key
     api_key = st.secrets.get("OPENAI_API_KEY")
-    
     if not api_key:
         return {"error": "⚠️ API Key 未配置，请在 Streamlit Secrets 中设置 OPENAI_API_KEY。"}
 
-    # 核心修改：把官方的门牌号，换成 ChatAnywhere 的门牌号！
     url = "https://api.chatanywhere.tech/v1/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
     
-    # 核心：提示词工程，并明确要求输出 JSON
     system_prompt = """
     你是一个严谨的临床营养学专家。用户会输入一种食物名称。
     请你查询或估算该食物的升糖指数(GI值)，并严格以JSON格式返回。
@@ -33,28 +29,22 @@ def fetch_gi_from_ai(food_name):
     """
     
     payload = {
-        "model": "gpt-3.5-turbo", # 免费版最稳定的模型
+        "model": "gpt-3.5-turbo", 
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"请查阅食物：{food_name}"}
         ],
         "temperature": 0.1,
-        "response_format": { "type": "json_object" } # 强制 JSON 模式
+        "response_format": { "type": "json_object" } 
     }
     
     try:
-        # 发送请求给 ChatAnywhere 服务器
         response = requests.post(url, headers=headers, json=payload, timeout=15)
         response.raise_for_status() 
-        
-        # 拆解返回的数据包
         result = response.json()
         ai_content = result['choices'][0]['message']['content']
-        
-        # 将文本转化为 Python 可以理解的字典
         data = json.loads(ai_content)
         return data
-        
     except Exception as e:
         return {"error": f"查询失败，请检查网络或 API Key：{str(e)}"}
 
@@ -124,13 +114,9 @@ def load_from_db(username):
 
 init_db()
 
-# ==========================================
-# 智能诊断逻辑引擎
-# ==========================================
 def judge_blood_sugar(value, time_type):
     if pd.isna(value) or value == 0.0 or value is None:
         return "未录入 ⚪"
-        
     if time_type == 'fasting': 
         if value < 4.4: return "偏低 🔵"
         elif value <= 7.0: return "正常 🟢"
@@ -146,13 +132,22 @@ def judge_blood_sugar(value, time_type):
     return "未知"
 
 # ==========================================
-# 4. 前端界面展示 (登录墙 + 主系统)
+# 4. 前端界面展示 (引入 Cookie 记忆逻辑)
 # ==========================================
 st.set_page_config(page_title="血糖监测与分析系统", layout="centered", page_icon="🩸")
 
-if "logged_in_user" not in st.session_state:
-    st.session_state["logged_in_user"] = None
+# 启动 Cookie 管理器
+cookie_manager = stx.CookieManager()
 
+# 核心逻辑：系统启动时，先去浏览器 Cookie 里翻找有没有历史登录记录
+if "logged_in_user" not in st.session_state:
+    cached_user = cookie_manager.get(cookie="saved_username")
+    if cached_user:
+        st.session_state["logged_in_user"] = cached_user # 找到凭证，自动免密登录
+    else:
+        st.session_state["logged_in_user"] = None
+
+# 未登录状态的界面
 if st.session_state["logged_in_user"] is None:
     st.title("🔐 血糖监测系统 - 登录")
     
@@ -162,9 +157,19 @@ if st.session_state["logged_in_user"] is None:
         st.subheader("账号登录")
         login_u = st.text_input("用户名", key="login_u")
         login_p = st.text_input("密码", type="password", key="login_p")
+        
+        # 新增：记住密码勾选项
+        remember_me = st.checkbox("保持登录 (7天内免输密码)")
+        
         if st.button("登录", use_container_width=True):
             if verify_login(login_u, login_p):
                 st.session_state["logged_in_user"] = login_u
+                
+                # 如果勾选了记住密码，发放时长 7 天的 Cookie 凭证
+                if remember_me:
+                    expire_date = datetime.datetime.now() + datetime.timedelta(days=7)
+                    cookie_manager.set("saved_username", login_u, expires_at=expire_date)
+                    
                 st.success("登录成功！正在进入系统...")
                 st.rerun()
             else:
@@ -182,31 +187,30 @@ if st.session_state["logged_in_user"] is None:
             else:
                 st.error("该用户名已被占用，请换一个。")
 
+# 已登录状态的主系统界面
 else:
     current_user = st.session_state["logged_in_user"]
     
-    # ==========================================
-    # 侧边栏：用户信息与 ChatGPT 智能 GI 引擎
-    # ==========================================
     st.sidebar.title("用户信息")
     st.sidebar.info(f"当前登录：**{current_user}**")
+    
+    # 退出登录时，同时销毁 Cookie 凭证
     if st.sidebar.button("退出登录"):
         st.session_state["logged_in_user"] = None
+        cookie_manager.delete("saved_username")
         st.rerun()
         
     st.sidebar.divider()
     
-    st.sidebar.title("🤖 ChatGPT 食物 GI 速查")
-    st.sidebar.caption("接入 OpenAI gpt-4o-mini 模型，查询天下万物。")
-    
+    st.sidebar.title("🤖 AI 食物 GI 速查")
+    st.sidebar.caption("接入 OpenAI 智能分析模型，查询天下万物。")
     search_query = st.sidebar.text_input("想吃什么？输入名称 (如: 兰州拉面, 拿铁)")
     
     if st.sidebar.button("启动 AI 分析"):
         if search_query:
-            with st.sidebar.status(f"正在呼叫 ChatGPT 分析【{search_query}】...", expanded=True) as status:
+            with st.sidebar.status(f"正在呼叫云端 AI 分析【{search_query}】...", expanded=True) as status:
                 ai_data = fetch_gi_from_ai(search_query)
                 status.update(label="分析完成！", state="complete", expanded=False)
-                
             if "error" in ai_data:
                 st.sidebar.error(ai_data["error"])
             else:
@@ -217,9 +221,6 @@ else:
         else:
             st.sidebar.warning("请先输入食物名称哦！")
     
-    # ==========================================
-    # 主面板：核心监控区
-    # ==========================================
     st.title("🩸 个人专属血糖监测面板")
     st.header("1. 录入今日数据")
 
@@ -307,7 +308,7 @@ else:
             elif composite_score >= 60:
                 insight_text += "基本面稳定，但需通过上方标签页核查哪一时间段的【波动率(标准差)】偏高，以规避异常风险。"
             else:
-                insight_text += "综合达标率偏低，多因子偏离基准线，建议结合左侧【🤖 ChatGPT 食物速查】干预饮食结构。"
+                insight_text += "综合达标率偏低，多因子偏离基准线，建议结合左侧【🤖 AI 食物速查】干预饮食结构。"
             st.info(insight_text)
 
         st.divider()
